@@ -3,306 +3,204 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { RotateCcw, Trophy, User, Hash } from 'lucide-react';
+import { RotateCcw, Trophy, User, Hash, Users, Eye, Play, Plus, LogOut } from 'lucide-react';
+import { io, Socket } from 'socket.io-client';
 
 const BOARD_SIZE = 15;
 
 type Player = 'black' | 'white';
 type CellValue = Player | null;
 
+interface GameState {
+  board: CellValue[][];
+  currentPlayer: Player;
+  winner: Player | 'draw' | null;
+  history: any[];
+  players: {
+    black: string | null;
+    white: string | null;
+  };
+  spectators: string[];
+}
+
 export default function App() {
-  const [board, setBoard] = useState<CellValue[][]>(
-    Array(BOARD_SIZE).fill(null).map(() => Array(BOARD_SIZE).fill(null))
-  );
-  const [currentPlayer, setCurrentPlayer] = useState<Player>('black');
-  const [winner, setWinner] = useState<Player | 'draw' | null>(null);
-  const [history, setHistory] = useState<{ row: number; col: number; player: Player }[]>([]);
-  const [gameMode, setGameMode] = useState<'pvp' | 'pvc'>('pvc');
-  const [difficulty, setDifficulty] = useState<'easy' | 'medium' | 'hard'>('medium');
-  const [isAiThinking, setIsAiThinking] = useState(false);
-
-  const checkWinner = useCallback((row: number, col: number, player: Player, currentBoard: CellValue[][]) => {
-    const directions = [
-      [0, 1],  // Horizontal
-      [1, 0],  // Vertical
-      [1, 1],  // Diagonal \
-      [1, -1], // Diagonal /
-    ];
-
-    for (const [dr, dc] of directions) {
-      let count = 1;
-
-      // Check forward
-      for (let i = 1; i < 5; i++) {
-        const r = row + dr * i;
-        const c = col + dc * i;
-        if (r >= 0 && r < BOARD_SIZE && c >= 0 && c < BOARD_SIZE && currentBoard[r][c] === player) {
-          count++;
-        } else {
-          break;
-        }
-      }
-
-      // Check backward
-      for (let i = 1; i < 5; i++) {
-        const r = row - dr * i;
-        const c = col - dc * i;
-        if (r >= 0 && r < BOARD_SIZE && c >= 0 && c < BOARD_SIZE && currentBoard[r][c] === player) {
-          count++;
-        } else {
-          break;
-        }
-      }
-
-      if (count >= 5) return true;
-    }
-    return false;
-  }, []);
-
-  const handleCellClick = (row: number, col: number) => {
-    if (board[row][col] || winner || isAiThinking) return;
-
-    makeMove(row, col);
-  };
-
-  const makeMove = (row: number, col: number) => {
-    const newBoard = board.map((r, ri) =>
-      r.map((c, ci) => (ri === row && ci === col ? currentPlayer : c))
-    );
-
-    setBoard(newBoard);
-    setHistory(prev => [...prev, { row, col, player: currentPlayer }]);
-
-    if (checkWinner(row, col, currentPlayer, newBoard)) {
-      setWinner(currentPlayer);
-    } else if (newBoard.every(r => r.every(c => c !== null))) {
-      setWinner('draw');
-    } else {
-      setCurrentPlayer(currentPlayer === 'black' ? 'white' : 'black');
-    }
-  };
-
-  // AI Logic
-  const evaluatePosition = useCallback((row: number, col: number, player: Player, currentBoard: CellValue[][]) => {
-    const directions = [[0, 1], [1, 0], [1, 1], [1, -1]];
-    let totalScore = 0;
-
-    for (const [dr, dc] of directions) {
-      let count = 1;
-      let openEnds = 0;
-
-      // Check forward
-      for (let i = 1; i < 5; i++) {
-        const r = row + dr * i;
-        const c = col + dc * i;
-        if (r >= 0 && r < BOARD_SIZE && c >= 0 && c < BOARD_SIZE) {
-          if (currentBoard[r][c] === player) count++;
-          else if (currentBoard[r][c] === null) { openEnds++; break; }
-          else break;
-        } else break;
-      }
-
-      // Check backward
-      for (let i = 1; i < 5; i++) {
-        const r = row - dr * i;
-        const c = col - dc * i;
-        if (r >= 0 && r < BOARD_SIZE && c >= 0 && c < BOARD_SIZE) {
-          if (currentBoard[r][c] === player) count++;
-          else if (currentBoard[r][c] === null) { openEnds++; break; }
-          else break;
-        } else break;
-      }
-
-      if (count >= 5) totalScore += 100000;
-      else if (count === 4) totalScore += openEnds === 2 ? 10000 : 1000;
-      else if (count === 3) totalScore += openEnds === 2 ? 1000 : 100;
-      else if (count === 2) totalScore += openEnds === 2 ? 100 : 10;
-      else if (count === 1) totalScore += 1;
-    }
-    return totalScore;
-  }, []);
+  const [roomId, setRoomId] = useState<string | null>(null);
+  const [inputRoomId, setInputRoomId] = useState('');
+  const [gameState, setGameState] = useState<GameState | null>(null);
+  const [myRole, setMyRole] = useState<'black' | 'white' | 'spectator' | null>(null);
+  const socketRef = useRef<Socket | null>(null);
 
   useEffect(() => {
-    if (gameMode === 'pvc' && currentPlayer === 'white' && !winner) {
-      setIsAiThinking(true);
-      const timer = setTimeout(() => {
-        // Easy mode random factor
-        if (difficulty === 'easy' && Math.random() < 0.3) {
-          const emptyCells: {r: number, c: number}[] = [];
-          for (let r = 0; r < BOARD_SIZE; r++) {
-            for (let c = 0; c < BOARD_SIZE; c++) {
-              if (!board[r][c]) emptyCells.push({r, c});
-            }
-          }
-          if (emptyCells.length > 0) {
-            const randomMove = emptyCells[Math.floor(Math.random() * emptyCells.length)];
-            makeMove(randomMove.r, randomMove.c);
-            setIsAiThinking(false);
-            return;
-          }
-        }
+    socketRef.current = io();
 
-        let bestScore = -1;
-        let bestMoves: { row: number; col: number }[] = [];
+    socketRef.current.on('init_state', ({ gameState, role }) => {
+      setGameState(gameState);
+      setMyRole(role);
+    });
 
-        // Difficulty weights
-        const defenseWeight = difficulty === 'easy' ? 0.4 : difficulty === 'medium' ? 0.9 : 1.1;
-        const offenseWeight = difficulty === 'hard' ? 1.2 : 1.0;
+    socketRef.current.on('room_update', (updatedState) => {
+      setGameState(updatedState);
+    });
 
-        // Simple heuristic: evaluate all empty cells
-        for (let r = 0; r < BOARD_SIZE; r++) {
-          for (let c = 0; c < BOARD_SIZE; c++) {
-            if (!board[r][c]) {
-              // Score for AI (offensive)
-              const aiScore = evaluatePosition(r, c, 'white', board);
-              // Score for Player (defensive)
-              const playerScore = evaluatePosition(r, c, 'black', board);
-              
-              const totalScore = (aiScore * offenseWeight) + (playerScore * defenseWeight);
-              
-              if (totalScore > bestScore) {
-                bestScore = totalScore;
-                bestMoves = [{ row: r, col: c }];
-              } else if (totalScore === bestScore) {
-                bestMoves.push({ row: r, col: c });
-              }
-            }
-          }
-        }
+    return () => {
+      socketRef.current?.disconnect();
+    };
+  }, []);
 
-        // Pick a random move from the best ones to avoid predictable patterns
-        const finalMove = bestMoves[Math.floor(Math.random() * bestMoves.length)];
-        makeMove(finalMove.row, finalMove.col);
-        setIsAiThinking(false);
-      }, 600);
-      return () => clearTimeout(timer);
-    }
-  }, [currentPlayer, gameMode, winner, board, evaluatePosition, difficulty]);
+  const joinRoom = (id: string) => {
+    if (!id.trim()) return;
+    setRoomId(id);
+    socketRef.current?.emit('join_room', id);
+  };
+
+  const handleCellClick = (row: number, col: number) => {
+    if (!roomId || !gameState || gameState.winner || myRole === 'spectator') return;
+    if (gameState.currentPlayer !== myRole) return;
+    if (gameState.board[row][col]) return;
+
+    socketRef.current?.emit('make_move', { roomId, row, col });
+  };
 
   const resetGame = () => {
-    setBoard(Array(BOARD_SIZE).fill(null).map(() => Array(BOARD_SIZE).fill(null)));
-    setCurrentPlayer('black');
-    setWinner(null);
-    setHistory([]);
-    setIsAiThinking(false);
+    if (!roomId) return;
+    socketRef.current?.emit('reset_game', roomId);
   };
 
-  const undoMove = () => {
-    if (history.length === 0 || winner || isAiThinking) return;
-    
-    // In PvC mode, undo two moves (AI and Player)
-    if (gameMode === 'pvc' && history.length >= 2) {
-      const newHistory = history.slice(0, -2);
-      const newBoard = Array(BOARD_SIZE).fill(null).map(() => Array(BOARD_SIZE).fill(null));
-      newHistory.forEach(move => {
-        newBoard[move.row][move.col] = move.player;
-      });
-      setBoard(newBoard);
-      setHistory(newHistory);
-      setCurrentPlayer('black');
-    } else {
-      const lastMove = history[history.length - 1];
-      const newBoard = board.map((r, ri) =>
-        r.map((c, ci) => (ri === lastMove.row && ci === lastMove.col ? null : c))
-      );
-      setBoard(newBoard);
-      setHistory(history.slice(0, -1));
-      setCurrentPlayer(lastMove.player);
-    }
+  const leaveRoom = () => {
+    setRoomId(null);
+    setGameState(null);
+    setMyRole(null);
+    window.location.reload(); // Simple way to reset state and disconnect
   };
 
-  return (
-    <div className="min-h-screen bg-[#F5F2ED] flex flex-col items-center justify-center p-4 font-sans text-[#1a1a1a]">
-      {/* Header */}
-      <motion.div 
-        initial={{ opacity: 0, y: -20 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="text-center mb-8"
-      >
-        <h1 className="text-4xl font-bold tracking-tight mb-2 flex items-center justify-center gap-2">
-          <Hash className="w-8 h-8" /> 五子棋大师
-        </h1>
-        <p className="text-sm uppercase tracking-widest opacity-60">Gomoku Master Edition</p>
-      </motion.div>
+  if (!roomId) {
+    return (
+      <div className="min-h-screen bg-[#F5F2ED] flex flex-col items-center justify-center p-4 font-sans text-[#1a1a1a]">
+        <motion.div 
+          initial={{ opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="text-center mb-12"
+        >
+          <h1 className="text-5xl font-bold tracking-tight mb-4 flex items-center justify-center gap-3">
+            <Hash className="w-10 h-10" /> 五子棋大师
+          </h1>
+          <p className="text-sm uppercase tracking-[0.3em] opacity-60">Gomoku Master Online</p>
+        </motion.div>
 
-      <div className="flex flex-col lg:flex-row gap-8 items-start">
-        {/* Game Info */}
-        <div className="flex flex-col gap-4 w-full lg:w-48">
-          <div className="bg-white p-6 rounded-3xl shadow-sm border border-black/5 flex flex-col gap-4">
-            {/* Mode Selector */}
-            <div className="flex flex-col gap-2 mb-2">
-              <p className="text-[10px] uppercase tracking-wider opacity-40 font-bold">游戏模式</p>
-              <div className="flex bg-[#F5F2ED] p-1 rounded-full">
-                <button 
-                  onClick={() => { setGameMode('pvc'); resetGame(); }}
-                  className={`flex-1 py-1.5 text-[10px] font-bold rounded-full transition-all ${gameMode === 'pvc' ? 'bg-black text-white shadow-md' : 'text-black/40 hover:text-black'}`}
-                >
-                  人机对战
-                </button>
-                <button 
-                  onClick={() => { setGameMode('pvp'); resetGame(); }}
-                  className={`flex-1 py-1.5 text-[10px] font-bold rounded-full transition-all ${gameMode === 'pvp' ? 'bg-black text-white shadow-md' : 'text-black/40 hover:text-black'}`}
-                >
-                  双人对战
-                </button>
-              </div>
-            </div>
-
-            {gameMode === 'pvc' && (
-              <div className="flex flex-col gap-2 mb-2">
-                <p className="text-[10px] uppercase tracking-wider opacity-40 font-bold">难度级别</p>
-                <div className="flex flex-col gap-1">
-                  <input 
-                    type="range" 
-                    min="0" 
-                    max="2" 
-                    step="1" 
-                    value={difficulty === 'easy' ? 0 : difficulty === 'medium' ? 1 : 2}
-                    onChange={(e) => {
-                      const val = parseInt(e.target.value);
-                      setDifficulty(val === 0 ? 'easy' : val === 1 ? 'medium' : 'hard');
-                      resetGame();
-                    }}
-                    className="w-full h-1.5 bg-[#F5F2ED] rounded-lg appearance-none cursor-pointer accent-black"
-                  />
-                  <div className="flex justify-between text-[9px] font-bold opacity-60 px-1">
-                    <span className={difficulty === 'easy' ? 'text-black opacity-100' : ''}>简单</span>
-                    <span className={difficulty === 'medium' ? 'text-black opacity-100' : ''}>中等</span>
-                    <span className={difficulty === 'hard' ? 'text-black opacity-100' : ''}>困难</span>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            <div className="h-px bg-black/5" />
-
-            <div className="flex items-center gap-3">
-              <div className={`w-4 h-4 rounded-full shadow-inner transition-all duration-300 ${currentPlayer === 'black' ? 'bg-black' : 'bg-white border border-black/10'}`} />
-              <span className="font-medium text-sm">
-                {isAiThinking ? '电脑思考中...' : (currentPlayer === 'black' ? '黑方回合' : '白方回合')}
-              </span>
-            </div>
-            <div className="h-px bg-black/5" />
-            <div className="flex flex-col gap-2">
+        <div className="bg-white p-8 rounded-[40px] shadow-2xl border border-black/5 w-full max-w-md flex flex-col gap-6">
+          <div className="flex flex-col gap-2">
+            <label className="text-xs font-bold uppercase tracking-wider opacity-40 px-2">创建或加入房间</label>
+            <div className="flex gap-2">
+              <input 
+                type="text" 
+                placeholder="输入房间号..."
+                value={inputRoomId}
+                onChange={(e) => setInputRoomId(e.target.value)}
+                className="flex-1 bg-[#F5F2ED] border-none rounded-2xl px-5 py-4 text-sm focus:ring-2 focus:ring-black transition-all outline-none"
+              />
               <button 
-                onClick={resetGame}
-                className="flex items-center justify-center gap-2 py-2 px-4 bg-black text-white rounded-full text-sm font-medium hover:bg-black/80 transition-colors"
+                onClick={() => joinRoom(inputRoomId)}
+                className="bg-black text-white px-6 rounded-2xl font-bold hover:bg-black/80 transition-all flex items-center justify-center"
               >
-                <RotateCcw className="w-4 h-4" /> 重新开始
-              </button>
-              <button 
-                onClick={undoMove}
-                disabled={history.length === 0 || !!winner}
-                className="flex items-center justify-center gap-2 py-2 px-4 border border-black/10 rounded-full text-sm font-medium hover:bg-black/5 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-              >
-                悔棋
+                <Plus className="w-5 h-5" />
               </button>
             </div>
           </div>
 
-          {winner && (
+          <div className="relative">
+            <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-black/5"></div></div>
+            <div className="relative flex justify-center text-xs uppercase tracking-widest text-black/20 bg-white px-2">或者</div>
+          </div>
+
+          <button 
+            onClick={() => joinRoom(Math.random().toString(36).substring(7))}
+            className="w-full py-4 px-6 border-2 border-black rounded-2xl font-bold flex items-center justify-center gap-2 hover:bg-black hover:text-white transition-all group"
+          >
+            <Play className="w-5 h-5 group-hover:scale-110 transition-transform" /> 快速开始
+          </button>
+        </div>
+
+        <div className="mt-12 flex items-center gap-8 opacity-30 text-xs font-medium">
+          <div className="flex items-center gap-2"><Users className="w-4 h-4" /> 多人对战</div>
+          <div className="flex items-center gap-2"><Eye className="w-4 h-4" /> 实时观战</div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-[#F5F2ED] flex flex-col items-center justify-center p-4 font-sans text-[#1a1a1a]">
+      {/* Header */}
+      <div className="w-full max-w-6xl flex items-center justify-between mb-8 px-4">
+        <div className="flex flex-col">
+          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
+            <Hash className="w-6 h-6" /> 五子棋大师
+          </h1>
+          <p className="text-[10px] uppercase tracking-widest opacity-40">房间: {roomId}</p>
+        </div>
+        <button 
+          onClick={leaveRoom}
+          className="flex items-center gap-2 px-4 py-2 bg-white border border-black/5 rounded-full text-xs font-bold hover:bg-red-50 hover:text-red-600 transition-all"
+        >
+          <LogOut className="w-4 h-4" /> 退出房间
+        </button>
+      </div>
+
+      <div className="flex flex-col lg:flex-row gap-8 items-start">
+        {/* Game Info */}
+        <div className="flex flex-col gap-4 w-full lg:w-64">
+          <div className="bg-white p-6 rounded-3xl shadow-sm border border-black/5 flex flex-col gap-6">
+            {/* Role Info */}
+            <div className="flex flex-col gap-3">
+              <p className="text-[10px] uppercase tracking-wider opacity-40 font-bold">你的身份</p>
+              <div className="flex items-center gap-3 bg-[#F5F2ED] p-3 rounded-2xl">
+                {myRole === 'spectator' ? (
+                  <Eye className="w-5 h-5 opacity-40" />
+                ) : (
+                  <div className={`w-5 h-5 rounded-full shadow-inner ${myRole === 'black' ? 'bg-black' : 'bg-white border border-black/10'}`} />
+                )}
+                <span className="font-bold text-sm">
+                  {myRole === 'black' ? '黑方 (先手)' : myRole === 'white' ? '白方 (后手)' : '观战者'}
+                </span>
+              </div>
+            </div>
+
+            <div className="h-px bg-black/5" />
+
+            {/* Turn Info */}
+            <div className="flex items-center gap-3">
+              <div className={`w-4 h-4 rounded-full shadow-inner transition-all duration-300 ${gameState?.currentPlayer === 'black' ? 'bg-black' : 'bg-white border border-black/10'}`} />
+              <span className="font-bold text-sm">
+                {gameState?.currentPlayer === 'black' ? '黑方回合' : '白方回合'}
+                {gameState?.currentPlayer === myRole && <span className="ml-2 text-green-600">(到你了)</span>}
+              </span>
+            </div>
+
+            <div className="h-px bg-black/5" />
+
+            {/* Controls */}
+            <div className="flex flex-col gap-2">
+              <button 
+                onClick={resetGame}
+                disabled={myRole === 'spectator'}
+                className="flex items-center justify-center gap-2 py-3 px-4 bg-black text-white rounded-2xl text-sm font-bold hover:bg-black/80 transition-all disabled:opacity-20"
+              >
+                <RotateCcw className="w-4 h-4" /> 重新开始
+              </button>
+            </div>
+          </div>
+
+          {/* Spectators List */}
+          <div className="bg-white p-4 rounded-3xl shadow-sm border border-black/5 flex flex-col gap-3">
+            <div className="flex items-center justify-between">
+              <p className="text-[10px] uppercase tracking-wider opacity-40 font-bold">观战人数</p>
+              <span className="text-xs font-bold">{gameState?.spectators.length || 0}</span>
+            </div>
+          </div>
+
+          {gameState?.winner && (
             <motion.div 
               initial={{ scale: 0.8, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
@@ -310,7 +208,7 @@ export default function App() {
             >
               <Trophy className="w-8 h-8 mb-2 text-yellow-400" />
               <h2 className="text-xl font-bold">
-                {winner === 'draw' ? '平局！' : `${winner === 'black' ? '黑方' : '白方'} 获胜！`}
+                {gameState.winner === 'draw' ? '平局！' : `${gameState.winner === 'black' ? '黑方' : '白方'} 获胜！`}
               </h2>
               <p className="text-xs opacity-60">精彩的对决</p>
             </motion.div>
@@ -318,7 +216,7 @@ export default function App() {
         </div>
 
         {/* Board Container */}
-        <div className="relative p-4 bg-[#DDBB88] rounded-xl shadow-2xl border-4 border-[#8B4513]">
+        <div className="relative p-6 bg-[#DDBB88] rounded-3xl shadow-2xl border-8 border-[#8B4513]">
           <div 
             className="grid gap-0" 
             style={{ 
@@ -327,12 +225,12 @@ export default function App() {
               height: 'min(90vw, 600px)'
             }}
           >
-            {board.map((row, ri) =>
+            {gameState?.board.map((row, ri) =>
               row.map((cell, ci) => (
                 <div
                   key={`${ri}-${ci}`}
                   onClick={() => handleCellClick(ri, ci)}
-                  className="relative cursor-pointer group"
+                  className={`relative ${myRole !== 'spectator' && gameState.currentPlayer === myRole && !gameState.winner ? 'cursor-pointer group' : 'cursor-default'}`}
                 >
                   {/* Grid Lines */}
                   <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
@@ -366,9 +264,9 @@ export default function App() {
                     </AnimatePresence>
                     
                     {/* Hover Preview */}
-                    {!cell && !winner && (
+                    {!cell && !gameState.winner && myRole === gameState.currentPlayer && (
                       <div className={`w-full h-full rounded-full opacity-0 group-hover:opacity-20 transition-opacity ${
-                        currentPlayer === 'black' ? 'bg-black' : 'bg-white border border-black'
+                        myRole === 'black' ? 'bg-black' : 'bg-white border border-black'
                       }`} />
                     )}
                   </div>
@@ -377,15 +275,6 @@ export default function App() {
             )}
           </div>
         </div>
-      </div>
-
-      {/* Footer */}
-      <div className="mt-12 text-xs opacity-40 flex items-center gap-4">
-        <div className="flex items-center gap-1">
-          <User className="w-3 h-3" /> {gameMode === 'pvc' ? '人机对战' : '双人对战'}
-        </div>
-        <div className="w-1 h-1 bg-black/20 rounded-full" />
-        <div>标准 15x15 棋盘</div>
       </div>
     </div>
   );
