@@ -1,0 +1,5 @@
+{
+  "name": "五子棋大师 (Gomoku Master)",
+  "description": "一个精美的网页版五子棋游戏，支持双人对战和胜负判定。",
+  "requestFramePermissions": []
+}
