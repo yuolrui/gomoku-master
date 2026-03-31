@@ -20,6 +20,7 @@ export default function App() {
   const [winner, setWinner] = useState<Player | 'draw' | null>(null);
   const [history, setHistory] = useState<{ row: number; col: number; player: Player }[]>([]);
   const [gameMode, setGameMode] = useState<'pvp' | 'pvc'>('pvc');
+  const [difficulty, setDifficulty] = useState<'easy' | 'medium' | 'hard'>('medium');
   const [isAiThinking, setIsAiThinking] = useState(false);
 
   const checkWinner = useCallback((row: number, col: number, player: Player, currentBoard: CellValue[][]) => {
@@ -127,8 +128,28 @@ export default function App() {
     if (gameMode === 'pvc' && currentPlayer === 'white' && !winner) {
       setIsAiThinking(true);
       const timer = setTimeout(() => {
+        // Easy mode random factor
+        if (difficulty === 'easy' && Math.random() < 0.3) {
+          const emptyCells: {r: number, c: number}[] = [];
+          for (let r = 0; r < BOARD_SIZE; r++) {
+            for (let c = 0; c < BOARD_SIZE; c++) {
+              if (!board[r][c]) emptyCells.push({r, c});
+            }
+          }
+          if (emptyCells.length > 0) {
+            const randomMove = emptyCells[Math.floor(Math.random() * emptyCells.length)];
+            makeMove(randomMove.r, randomMove.c);
+            setIsAiThinking(false);
+            return;
+          }
+        }
+
         let bestScore = -1;
-        let bestMove = { row: 7, col: 7 };
+        let bestMoves: { row: number; col: number }[] = [];
+
+        // Difficulty weights
+        const defenseWeight = difficulty === 'easy' ? 0.4 : difficulty === 'medium' ? 0.9 : 1.1;
+        const offenseWeight = difficulty === 'hard' ? 1.2 : 1.0;
 
         // Simple heuristic: evaluate all empty cells
         for (let r = 0; r < BOARD_SIZE; r++) {
@@ -139,22 +160,26 @@ export default function App() {
               // Score for Player (defensive)
               const playerScore = evaluatePosition(r, c, 'black', board);
               
-              const totalScore = aiScore + playerScore * 0.9; // Slightly prioritize offense
+              const totalScore = (aiScore * offenseWeight) + (playerScore * defenseWeight);
               
               if (totalScore > bestScore) {
                 bestScore = totalScore;
-                bestMove = { row: r, col: c };
+                bestMoves = [{ row: r, col: c }];
+              } else if (totalScore === bestScore) {
+                bestMoves.push({ row: r, col: c });
               }
             }
           }
         }
 
-        makeMove(bestMove.row, bestMove.col);
+        // Pick a random move from the best ones to avoid predictable patterns
+        const finalMove = bestMoves[Math.floor(Math.random() * bestMoves.length)];
+        makeMove(finalMove.row, finalMove.col);
         setIsAiThinking(false);
       }, 600);
       return () => clearTimeout(timer);
     }
-  }, [currentPlayer, gameMode, winner, board, evaluatePosition]);
+  }, [currentPlayer, gameMode, winner, board, evaluatePosition, difficulty]);
 
   const resetGame = () => {
     setBoard(Array(BOARD_SIZE).fill(null).map(() => Array(BOARD_SIZE).fill(null)));
@@ -224,6 +249,32 @@ export default function App() {
                 </button>
               </div>
             </div>
+
+            {gameMode === 'pvc' && (
+              <div className="flex flex-col gap-2 mb-2">
+                <p className="text-[10px] uppercase tracking-wider opacity-40 font-bold">难度级别</p>
+                <div className="flex flex-col gap-1">
+                  <input 
+                    type="range" 
+                    min="0" 
+                    max="2" 
+                    step="1" 
+                    value={difficulty === 'easy' ? 0 : difficulty === 'medium' ? 1 : 2}
+                    onChange={(e) => {
+                      const val = parseInt(e.target.value);
+                      setDifficulty(val === 0 ? 'easy' : val === 1 ? 'medium' : 'hard');
+                      resetGame();
+                    }}
+                    className="w-full h-1.5 bg-[#F5F2ED] rounded-lg appearance-none cursor-pointer accent-black"
+                  />
+                  <div className="flex justify-between text-[9px] font-bold opacity-60 px-1">
+                    <span className={difficulty === 'easy' ? 'text-black opacity-100' : ''}>简单</span>
+                    <span className={difficulty === 'medium' ? 'text-black opacity-100' : ''}>中等</span>
+                    <span className={difficulty === 'hard' ? 'text-black opacity-100' : ''}>困难</span>
+                  </div>
+                </div>
+              </div>
+            )}
 
             <div className="h-px bg-black/5" />
 
