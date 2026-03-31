@@ -44,8 +44,18 @@ async function startServer() {
   const PORT = 3000;
 
   // Socket.io logic
+  const broadcastRoomList = () => {
+    const roomList = Array.from(rooms.entries()).map(([id, state]) => ({
+      id,
+      playerCount: (state.players.black.id ? 1 : 0) + (state.players.white.id ? 1 : 0),
+      spectatorCount: state.spectators.length
+    }));
+    io.emit("room_list", roomList);
+  };
+
   io.on("connection", (socket) => {
     console.log("User connected:", socket.id);
+    broadcastRoomList();
 
     socket.on("join_room", (roomId) => {
       socket.join(roomId);
@@ -63,6 +73,7 @@ async function startServer() {
           spectators: [],
           messages: []
         });
+        broadcastRoomList();
       }
 
       const gameState = rooms.get(roomId)!;
@@ -81,6 +92,7 @@ async function startServer() {
 
       socket.emit("init_state", { gameState, role });
       io.to(roomId).emit("room_update", gameState);
+      broadcastRoomList();
     });
 
     socket.on("send_message", ({ roomId, text, nickname }) => {
@@ -170,6 +182,7 @@ async function startServer() {
           } else {
             io.to(roomId).emit("room_update", gameState);
           }
+          broadcastRoomList();
         }
       }
     });

@@ -35,9 +35,16 @@ interface GameState {
   messages: Message[];
 }
 
+interface RoomInfo {
+  id: string;
+  playerCount: number;
+  spectatorCount: number;
+}
+
 export default function App() {
   const [roomId, setRoomId] = useState<string | null>(null);
   const [inputRoomId, setInputRoomId] = useState('');
+  const [roomList, setRoomList] = useState<RoomInfo[]>([]);
   const [gameState, setGameState] = useState<GameState | null>(null);
   const [myRole, setMyRole] = useState<'black' | 'white' | 'spectator' | null>(null);
   const [nickname, setNickname] = useState(() => localStorage.getItem('gomoku_nickname') || '');
@@ -73,6 +80,10 @@ export default function App() {
 
     socketRef.current.on('new_message', (message) => {
       setMessages(prev => [...prev, message]);
+    });
+
+    socketRef.current.on('room_list', (list) => {
+      setRoomList(list);
     });
 
     return () => {
@@ -169,6 +180,29 @@ export default function App() {
           >
             <Play className="w-5 h-5 group-hover:scale-110 transition-transform" /> 快速开始
           </button>
+
+          {roomList.length > 0 && (
+            <div className="flex flex-col gap-3">
+              <label className="text-xs font-bold uppercase tracking-wider opacity-40 px-2">活跃房间</label>
+              <div className="flex flex-col gap-2 max-h-48 overflow-y-auto pr-2 scrollbar-hide">
+                {roomList.map((room) => (
+                  <button
+                    key={room.id}
+                    onClick={() => joinRoom(room.id)}
+                    className="flex items-center justify-between p-4 bg-[#F5F2ED] rounded-2xl hover:bg-black hover:text-white transition-all group"
+                  >
+                    <div className="flex flex-col items-start">
+                      <span className="text-sm font-bold">房间: {room.id}</span>
+                      <span className="text-[10px] opacity-40 group-hover:opacity-60">
+                        {room.playerCount}/2 玩家 · {room.spectatorCount} 观战
+                      </span>
+                    </div>
+                    <Plus className="w-4 h-4 opacity-20 group-hover:opacity-100" />
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="mt-12 flex items-center gap-8 opacity-30 text-xs font-medium">
