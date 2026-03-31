@@ -8,16 +8,26 @@ import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+interface Message {
+  id: string;
+  senderId: string;
+  nickname: string;
+  role: string;
+  text: string;
+  timestamp: number;
+}
+
 interface GameState {
   board: (string | null)[][];
   currentPlayer: 'black' | 'white';
   winner: string | null;
   history: any[];
   players: {
-    black: string | null;
-    white: string | null;
+    black: { id: string | null; nickname: string | null };
+    white: { id: string | null; nickname: string | null };
   };
   spectators: string[];
+  messages: Message[];
 }
 
 const rooms: Map<string, GameState> = new Map();
@@ -46,8 +56,12 @@ async function startServer() {
           currentPlayer: 'black',
           winner: null,
           history: [],
-          players: { black: null, white: null },
-          spectators: []
+          players: { 
+            black: { id: null, nickname: null }, 
+            white: { id: null, nickname: null } 
+          },
+          spectators: [],
+          messages: []
         });
       }
 
@@ -55,11 +69,11 @@ async function startServer() {
       
       // Assign role
       let role: 'black' | 'white' | 'spectator' = 'spectator';
-      if (!gameState.players.black) {
-        gameState.players.black = socket.id;
+      if (!gameState.players.black.id) {
+        gameState.players.black.id = socket.id;
         role = 'black';
-      } else if (!gameState.players.white) {
-        gameState.players.white = socket.id;
+      } else if (!gameState.players.white.id) {
+        gameState.players.white.id = socket.id;
         role = 'white';
       } else {
         gameState.spectators.push(socket.id);
@@ -69,12 +83,37 @@ async function startServer() {
       io.to(roomId).emit("room_update", gameState);
     });
 
+    socket.on("send_message", ({ roomId, text, nickname }) => {
+      const gameState = rooms.get(roomId);
+      if (!gameState || !text.trim()) return;
+
+      let role = 'spectator';
+      if (gameState.players.black.id === socket.id) role = 'black';
+      else if (gameState.players.white.id === socket.id) role = 'white';
+
+      const newMessage: Message = {
+        id: Math.random().toString(36).substring(2, 9),
+        senderId: socket.id,
+        nickname: nickname || '匿名',
+        role,
+        text: text.trim(),
+        timestamp: Date.now()
+      };
+
+      gameState.messages.push(newMessage);
+      if (gameState.messages.length > 50) {
+        gameState.messages.shift();
+      }
+
+      io.to(roomId).emit("new_message", newMessage);
+    });
+
     socket.on("make_move", ({ roomId, row, col }) => {
       const gameState = rooms.get(roomId);
       if (!gameState || gameState.winner) return;
 
       // Verify it's the correct player's turn
-      const expectedPlayerId = gameState.currentPlayer === 'black' ? gameState.players.black : gameState.players.white;
+      const expectedPlayerId = gameState.currentPlayer === 'black' ? gameState.players.black.id : gameState.players.white.id;
       if (socket.id !== expectedPlayerId) return;
 
       if (gameState.board[row][col]) return;
@@ -99,7 +138,7 @@ async function startServer() {
       if (!gameState) return;
       
       // Only players can reset
-      if (socket.id !== gameState.players.black && socket.id !== gameState.players.white) return;
+      if (socket.id !== gameState.players.black.id && socket.id !== gameState.players.white.id) return;
 
       gameState.board = Array(15).fill(null).map(() => Array(15).fill(null));
       gameState.currentPlayer = 'black';
@@ -113,14 +152,20 @@ async function startServer() {
       for (const roomId of socket.rooms) {
         const gameState = rooms.get(roomId);
         if (gameState) {
-          if (gameState.players.black === socket.id) gameState.players.black = null;
-          else if (gameState.players.white === socket.id) gameState.players.white = null;
+          if (gameState.players.black.id === socket.id) {
+            gameState.players.black.id = null;
+            gameState.players.black.nickname = null;
+          }
+          else if (gameState.players.white.id === socket.id) {
+            gameState.players.white.id = null;
+            gameState.players.white.nickname = null;
+          }
           else {
             gameState.spectators = gameState.spectators.filter(id => id !== socket.id);
           }
           
           // If room empty, delete it
-          if (!gameState.players.black && !gameState.players.white && gameState.spectators.length === 0) {
+          if (!gameState.players.black.id && !gameState.players.white.id && gameState.spectators.length === 0) {
             rooms.delete(roomId);
           } else {
             io.to(roomId).emit("room_update", gameState);

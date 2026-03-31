@@ -5,7 +5,7 @@
 
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { RotateCcw, Trophy, User, Hash, Users, Eye, Play, Plus, LogOut } from 'lucide-react';
+import { RotateCcw, Trophy, User, Hash, Users, Eye, Play, Plus, LogOut, Send, MessageSquare } from 'lucide-react';
 import { io, Socket } from 'socket.io-client';
 
 const BOARD_SIZE = 15;
@@ -13,16 +13,26 @@ const BOARD_SIZE = 15;
 type Player = 'black' | 'white';
 type CellValue = Player | null;
 
+interface Message {
+  id: string;
+  senderId: string;
+  nickname: string;
+  role: string;
+  text: string;
+  timestamp: number;
+}
+
 interface GameState {
   board: CellValue[][];
   currentPlayer: Player;
   winner: Player | 'draw' | null;
   history: any[];
   players: {
-    black: string | null;
-    white: string | null;
+    black: { id: string | null; nickname: string | null };
+    white: { id: string | null; nickname: string | null };
   };
   spectators: string[];
+  messages: Message[];
 }
 
 export default function App() {
@@ -30,7 +40,23 @@ export default function App() {
   const [inputRoomId, setInputRoomId] = useState('');
   const [gameState, setGameState] = useState<GameState | null>(null);
   const [myRole, setMyRole] = useState<'black' | 'white' | 'spectator' | null>(null);
+  const [nickname, setNickname] = useState(() => localStorage.getItem('gomoku_nickname') || '');
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [chatInput, setChatInput] = useState('');
   const socketRef = useRef<Socket | null>(null);
+  const chatEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    localStorage.setItem('gomoku_nickname', nickname);
+  }, [nickname]);
+
+  const scrollToBottom = () => {
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
 
   useEffect(() => {
     socketRef.current = io();
@@ -38,10 +64,15 @@ export default function App() {
     socketRef.current.on('init_state', ({ gameState, role }) => {
       setGameState(gameState);
       setMyRole(role);
+      setMessages(gameState.messages || []);
     });
 
     socketRef.current.on('room_update', (updatedState) => {
       setGameState(updatedState);
+    });
+
+    socketRef.current.on('new_message', (message) => {
+      setMessages(prev => [...prev, message]);
     });
 
     return () => {
@@ -68,6 +99,13 @@ export default function App() {
     socketRef.current?.emit('reset_game', roomId);
   };
 
+  const sendMessage = (e: any) => {
+    e.preventDefault();
+    if (!roomId || !chatInput.trim()) return;
+    socketRef.current?.emit('send_message', { roomId, text: chatInput, nickname: nickname || '玩家' });
+    setChatInput('');
+  };
+
   const leaveRoom = () => {
     setRoomId(null);
     setGameState(null);
@@ -90,6 +128,17 @@ export default function App() {
         </motion.div>
 
         <div className="bg-white p-8 rounded-[40px] shadow-2xl border border-black/5 w-full max-w-md flex flex-col gap-6">
+          <div className="flex flex-col gap-2">
+            <label className="text-xs font-bold uppercase tracking-wider opacity-40 px-2">你的昵称</label>
+            <input 
+              type="text" 
+              placeholder="输入昵称..."
+              value={nickname}
+              onChange={(e) => setNickname(e.target.value)}
+              className="bg-[#F5F2ED] border-none rounded-2xl px-5 py-4 text-sm focus:ring-2 focus:ring-black transition-all outline-none"
+            />
+          </div>
+
           <div className="flex flex-col gap-2">
             <label className="text-xs font-bold uppercase tracking-wider opacity-40 px-2">创建或加入房间</label>
             <div className="flex gap-2">
@@ -154,16 +203,25 @@ export default function App() {
           <div className="bg-white p-6 rounded-3xl shadow-sm border border-black/5 flex flex-col gap-6">
             {/* Role Info */}
             <div className="flex flex-col gap-3">
-              <p className="text-[10px] uppercase tracking-wider opacity-40 font-bold">你的身份</p>
-              <div className="flex items-center gap-3 bg-[#F5F2ED] p-3 rounded-2xl">
-                {myRole === 'spectator' ? (
-                  <Eye className="w-5 h-5 opacity-40" />
-                ) : (
-                  <div className={`w-5 h-5 rounded-full shadow-inner ${myRole === 'black' ? 'bg-black' : 'bg-white border border-black/10'}`} />
-                )}
-                <span className="font-bold text-sm">
-                  {myRole === 'black' ? '黑方 (先手)' : myRole === 'white' ? '白方 (后手)' : '观战者'}
-                </span>
+              <p className="text-[10px] uppercase tracking-wider opacity-40 font-bold">你的身份 & 昵称</p>
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center gap-3 bg-[#F5F2ED] p-3 rounded-2xl">
+                  {myRole === 'spectator' ? (
+                    <Eye className="w-5 h-5 opacity-40" />
+                  ) : (
+                    <div className={`w-5 h-5 rounded-full shadow-inner ${myRole === 'black' ? 'bg-black' : 'bg-white border border-black/10'}`} />
+                  )}
+                  <span className="font-bold text-sm">
+                    {myRole === 'black' ? '黑方 (先手)' : myRole === 'white' ? '白方 (后手)' : '观战者'}
+                  </span>
+                </div>
+                <input 
+                  type="text" 
+                  placeholder="修改昵称..."
+                  value={nickname}
+                  onChange={(e) => setNickname(e.target.value)}
+                  className="w-full bg-[#F5F2ED] border-none rounded-xl px-3 py-2 text-xs focus:ring-1 focus:ring-black outline-none transition-all"
+                />
               </div>
             </div>
 
@@ -213,6 +271,59 @@ export default function App() {
               <p className="text-xs opacity-60">精彩的对决</p>
             </motion.div>
           )}
+
+          {/* Chat Box */}
+          <div className="bg-white rounded-3xl shadow-sm border border-black/5 flex flex-col h-[400px] lg:h-[450px] overflow-hidden">
+            <div className="p-4 border-bottom border-black/5 flex items-center gap-2 bg-black/5">
+              <MessageSquare className="w-4 h-4 opacity-40" />
+              <span className="text-[10px] uppercase tracking-wider font-bold opacity-40">实时聊天</span>
+            </div>
+            
+            <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-3 scrollbar-hide">
+              {messages.map((msg) => (
+                <div 
+                  key={msg.id} 
+                  className={`flex flex-col ${msg.senderId === socketRef.current?.id ? 'items-end' : 'items-start'}`}
+                >
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-[9px] font-bold text-black/60">
+                      {msg.nickname}
+                    </span>
+                    <span className="text-[8px] font-bold uppercase tracking-tighter opacity-30">
+                      {msg.role === 'black' ? '黑方' : msg.role === 'white' ? '白方' : '观众'}
+                    </span>
+                    <span className="text-[8px] opacity-20">
+                      {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </span>
+                  </div>
+                  <div className={`px-3 py-2 rounded-2xl text-xs max-w-[85%] break-words ${
+                    msg.senderId === socketRef.current?.id 
+                      ? 'bg-black text-white rounded-tr-none' 
+                      : 'bg-[#F5F2ED] text-black rounded-tl-none'
+                  }`}>
+                    {msg.text}
+                  </div>
+                </div>
+              ))}
+              <div ref={chatEndRef} />
+            </div>
+
+            <form onSubmit={sendMessage} className="p-3 bg-[#F5F2ED] flex gap-2">
+              <input 
+                type="text" 
+                placeholder="说点什么..."
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
+                className="flex-1 bg-white border-none rounded-xl px-4 py-2 text-xs focus:ring-1 focus:ring-black outline-none transition-all"
+              />
+              <button 
+                type="submit"
+                className="bg-black text-white p-2 rounded-xl hover:bg-black/80 transition-all"
+              >
+                <Send className="w-4 h-4" />
+              </button>
+            </form>
+          </div>
         </div>
 
         {/* Board Container */}
